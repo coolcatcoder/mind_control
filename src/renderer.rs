@@ -1,4 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::{Index, IndexMut},
+    slice::SliceIndex,
+    sync::Arc,
+};
 
 use clunky::{
     math::{mul_3d_by_1d, Matrix4, Radians},
@@ -215,6 +220,7 @@ pub struct Renderer {
     pipelines: Pipelines,
 
     pub buffers: Buffers,
+    pub proc_buffers: ProcBuffers,
     images_and_samplers: ImagesAndSamplers,
 
     pub windows_manager: VulkanoWindows,
@@ -267,6 +273,7 @@ impl Renderer {
         let pipelines = Pipelines::new(context.device(), &render_pass);
 
         let buffers = Buffers::new(&allocators, &context);
+        let proc_buffers = ProcBuffers::new(&allocators, &context);
         let images_and_samplers = ImagesAndSamplers::new(&context, &allocators, &pipelines);
 
         let renderer = Self {
@@ -278,6 +285,7 @@ impl Renderer {
             pipelines,
 
             buffers,
+            proc_buffers,
             images_and_samplers,
 
             windows_manager,
@@ -304,6 +312,91 @@ impl Renderer {
         }
     }
 
+    pub fn proc_render(&mut self, bodies: Option<&[Body]>) {
+        // add to buffers here
+
+        for (window_id, window_specific) in &mut self.window_specifics {
+            let window_renderer = self.windows_manager.get_renderer_mut(*window_id).unwrap();
+
+            let future = window_renderer.acquire().unwrap();
+
+            let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
+                &self.allocators.command_buffer_allocator,
+                self.context.graphics_queue().queue_family_index(),
+                CommandBufferUsage::OneTimeSubmit,
+            )
+            .unwrap();
+
+            //TODO: Creating a depth buffer and a frame buffer every frame for every window is very very bad. Not avoidable until next vulkano version.
+
+            let depth_buffer_view = ImageView::new_default(
+                Image::new(
+                    self.context.memory_allocator().clone(),
+                    ImageCreateInfo {
+                        image_type: ImageType::Dim2d,
+                        format: Format::D32_SFLOAT,
+                        extent: window_renderer.swapchain_image_view().image().extent(),
+                        usage: ImageUsage::TRANSIENT_ATTACHMENT
+                            | ImageUsage::DEPTH_STENCIL_ATTACHMENT,
+                        ..Default::default()
+                    },
+                    AllocationCreateInfo::default(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            let framebuffer = Framebuffer::new(
+                self.render_pass.clone(),
+                FramebufferCreateInfo {
+                    attachments: vec![window_renderer.swapchain_image_view(), depth_buffer_view],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            command_buffer_builder
+                .begin_render_pass(
+                    RenderPassBeginInfo {
+                        clear_values: vec![
+                            // Sets background colour.
+                            Some(ClearValue::Float(BACKGROUND_COLOUR)),
+                            Some(ClearValue::Depth(1.0)),
+                        ],
+                        ..RenderPassBeginInfo::framebuffer(framebuffer)
+                    },
+                    Default::default(),
+                )
+                .unwrap()
+                .set_viewport(0, [window_specific.viewport.clone()].into_iter().collect())
+                .unwrap();
+
+            match &window_specific.variety {
+                WindowVariety::Creature(camera) => {
+                }
+                WindowVariety::Selection => {
+                }
+                WindowVariety::Menu => {
+                }
+            }
+
+            command_buffer_builder
+                .end_render_pass(Default::default())
+                .unwrap();
+            let command_buffer = command_buffer_builder.build().unwrap();
+            window_renderer.present(
+                future
+                    .then_execute(self.context.graphics_queue().clone(), command_buffer)
+                    .unwrap()
+                    .boxed(),
+                false,
+            );
+        }
+
+        // remove from buffers here
+    }
+
+    // MARK: Render
     pub fn render(&mut self, bodies: Option<&[Body]>) {
         self.buffers.before_rendering(bodies);
         for (window_id, window_specific) in &mut self.window_specifics {
@@ -741,6 +834,7 @@ impl Renderer {
 // Don't do the silly and slow option of constantly checking a very long vec for nones.
 // But how would we deal with indices suddenly being wrong?
 // Perhaps when I know a None index, we just move the next instance into it?
+// MARK: Buffers
 pub struct Buffers {
     //TODO: Get this working with u8 indices.
     cuboid_colour_vertices_and_indices:
@@ -752,7 +846,7 @@ pub struct Buffers {
 
     // I imagine that this will be temporary.
     //terrain_colour_vertices_and_indices:
-        //DeviceVerticesAndIndices<simple_lit_colour_3d::Vertex, u32>,
+    //DeviceVerticesAndIndices<simple_lit_colour_3d::Vertex, u32>,
 
     // These can be used for all uv squaroids, as they all have the same layout.
     squaroid_uv_vertices_and_indices:
@@ -781,7 +875,7 @@ impl Buffers {
         let cuboid_colour_indices = meshes::get_indices_from_gltf(meshes::CUBE_GLTF, 0);
 
         //let terrain_colour_vertices =
-            //simple_lit_colour_3d::Vertex::get_array_from_gltf(TERRAIN_GLTF, 0);
+        //simple_lit_colour_3d::Vertex::get_array_from_gltf(TERRAIN_GLTF, 0);
         //let terrain_colour_indices = meshes::get_indices_from_gltf(TERRAIN_GLTF, 0);
 
         let selection_menu_uv_vertices =
@@ -807,7 +901,6 @@ impl Buffers {
             //     &allocators.memory_allocator,
             //     &mut command_buffer_builder,
             // ),
-
             squaroid_uv_vertices_and_indices: DeviceVerticesAndIndices::new(
                 selection_menu_uv_vertices,
                 selection_menu_uv_indices,
@@ -1162,117 +1255,17 @@ fn image_from_png(
     ImageView::new_default(image).unwrap()
 }
 
-struct Pipelines {
-    instanced_simple_lit_colour_3d: Arc<GraphicsPipeline>,
-    simple_lit_colour_3d: Arc<GraphicsPipeline>,
-    instanced_unlit_uv_2d_stretch: Arc<GraphicsPipeline>,
-    instanced_text_sdf: Arc<GraphicsPipeline>,
-}
+// MARK: Pipelines
+procedural_macros::generate_pipelines_struct!();
 
 impl Pipelines {
     fn new(device: &Arc<Device>, render_pass: &Arc<RenderPass>) -> Self {
         let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
 
-        let instanced_simple_lit_colour_3d = GraphicsPipeline::new(
-            device.clone(),
-            None,
-            GraphicsPipelineCreateInfo {
-                viewport_state: Some(ViewportState::default()),
-                rasterization_state: Some(RasterizationState {
-                    cull_mode: CullMode::Back,
-                    front_face: FrontFace::CounterClockwise,
-                    ..Default::default()
-                }),
-                input_assembly_state: Some(InputAssemblyState {
-                    topology: PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                }),
-                multisample_state: Some(MultisampleState::default()),
-                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                ..instanced_simple_lit_colour_3d::graphics_pipeline_create_info(
-                    device.clone(),
-                    subpass.clone(),
-                )
-            },
-        )
-        .unwrap();
-
-        let simple_lit_colour_3d = GraphicsPipeline::new(
-            device.clone(),
-            None,
-            GraphicsPipelineCreateInfo {
-                viewport_state: Some(ViewportState::default()),
-                rasterization_state: Some(RasterizationState {
-                    cull_mode: CullMode::Back,
-                    front_face: FrontFace::CounterClockwise,
-                    ..Default::default()
-                }),
-                input_assembly_state: Some(InputAssemblyState {
-                    topology: PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                }),
-                multisample_state: Some(MultisampleState::default()),
-                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                ..simple_lit_colour_3d::graphics_pipeline_create_info(
-                    device.clone(),
-                    subpass.clone(),
-                )
-            },
-        )
-        .unwrap();
-
-        let instanced_unlit_uv_2d_stretch = GraphicsPipeline::new(
-            device.clone(),
-            None,
-            GraphicsPipelineCreateInfo {
-                viewport_state: Some(ViewportState::default()),
-                rasterization_state: Some(RasterizationState {
-                    cull_mode: CullMode::Back,
-                    front_face: FrontFace::CounterClockwise,
-                    ..Default::default()
-                }),
-                input_assembly_state: Some(InputAssemblyState {
-                    topology: PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                }),
-                multisample_state: Some(MultisampleState::default()),
-                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                ..instanced_unlit_uv_2d_stretch::graphics_pipeline_create_info(
-                    device.clone(),
-                    subpass.clone(),
-                )
-            },
-        )
-        .unwrap();
-
-        let instanced_text_sdf = GraphicsPipeline::new(
-            device.clone(),
-            None,
-            GraphicsPipelineCreateInfo {
-                viewport_state: Some(ViewportState::default()),
-                rasterization_state: Some(RasterizationState {
-                    cull_mode: CullMode::Back,
-                    front_face: FrontFace::CounterClockwise,
-                    ..Default::default()
-                }),
-                input_assembly_state: Some(InputAssemblyState {
-                    topology: PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                }),
-                multisample_state: Some(MultisampleState::default()),
-                dynamic_state: [DynamicState::Viewport].into_iter().collect(),
-                ..instanced_text_sdf::graphics_pipeline_create_info(device.clone(), subpass.clone())
-            },
-        )
-        .unwrap();
-
-        Self {
-            instanced_simple_lit_colour_3d,
-            simple_lit_colour_3d,
-            instanced_unlit_uv_2d_stretch,
-            instanced_text_sdf,
-        }
+        procedural_macros::generate_pipelines_struct_impl_new!()
     }
+
+    //procedural_macros::generate_pipelines_struct_impl_bind_functions!();
 
     fn bind_instanced_simple_lit_colour_3d(
         &self,
@@ -1371,7 +1364,7 @@ impl Pipelines {
     }
 }
 
-procedural_macros::generate_buffers_struct!{}
+procedural_macros::generate_buffers_struct! {}
 
 impl ProcBuffers {
     fn new(allocators: &Allocators, context: &VulkanoContext) -> Self {
@@ -1444,11 +1437,96 @@ where
     .unwrap();
 
     command_buffer_builder
-        .copy_buffer(CopyBufferInfo::buffers(
-            staging,
-            device.clone(),
-        ))
+        .copy_buffer(CopyBufferInfo::buffers(staging, device.clone()))
         .unwrap();
 
     device
+}
+
+#[derive(Debug)]
+pub enum CuboidColourPotentialInstance {
+    PhysicsWithColour { body_index: usize, colour: [f32; 4] },
+}
+
+impl CuboidColourPotentialInstance {
+    #[inline]
+    fn to_instance(&self, bodies: &[Body]) -> Option<instanced_simple_lit_colour_3d::Instance> {
+        match self {
+            Self::PhysicsWithColour { body_index, colour } => {
+                let body = &bodies[*body_index];
+                Some(instanced_simple_lit_colour_3d::Instance::new(
+                    *colour,
+                    Matrix4::from_translation(body.position_unchecked())
+                        * Matrix4::from_scale(mul_3d_by_1d(body.half_size_unchecked(), 2.0)),
+                ))
+            }
+        }
+    }
+}
+
+// MARK: Hotel
+/// A hotel, you can request a room, and you will be given a key.
+/// When you leave, you give the hotel the key, and now someone else can use that room.
+///
+/// As soon as I realised that this was like a hotel, I searched the internet and found a crate already exists: https://crates.io/crates/hotel
+/// I have used that to improve this struct. Hopefully they won't mind.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hotel<T> {
+    pub vec: Vec<Option<T>>,
+    pub dead_indices: Vec<usize>,
+}
+
+impl<T> Hotel<T> {
+    pub fn new(vec: Vec<Option<T>>, dead_indices_starting_capacity: usize) -> Self {
+        Self {
+            vec,
+            dead_indices: Vec::with_capacity(dead_indices_starting_capacity),
+        }
+    }
+
+    /// Pushes value into the first empty room, and returns the key.
+    /// If no rooms are empty, then it adds a new room to the vec.
+    #[inline]
+    pub fn push(&mut self, value: T) -> usize {
+        match self.dead_indices.pop() {
+            Some(index) => {
+                self.vec[index] = Some(value);
+                index
+            }
+            None => {
+                let index = self.vec.len();
+                self.vec.push(Some(value));
+                index
+            }
+        }
+    }
+
+    #[inline]
+    pub fn remove(&mut self, index: usize) -> T {
+        self.dead_indices.push(index);
+        self.vec[index]
+            .take()
+            .expect("Index should have been given by the hotel.")
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.vec.len()-self.dead_indices.len()
+    }
+}
+
+impl<T> Index<usize> for Hotel<T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        self.vec[index].as_ref().unwrap()
+    }
+}
+
+impl<T> IndexMut<usize> for Hotel<T> {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.vec[index].as_mut().unwrap()
+    }
 }
