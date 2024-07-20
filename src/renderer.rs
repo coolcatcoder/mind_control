@@ -373,11 +373,10 @@ impl Renderer {
 
             match &window_specific.variety {
                 WindowVariety::Creature(camera) => {
+                    procedural_macros::command_list!(creature_window);
                 }
-                WindowVariety::Selection => {
-                }
-                WindowVariety::Menu => {
-                }
+                WindowVariety::Selection => {}
+                WindowVariety::Menu => {}
             }
 
             command_buffer_builder
@@ -475,12 +474,7 @@ impl Renderer {
                     let cuboid_colour_instance_buffer = self
                         .allocators
                         .subbuffer_allocator
-                        .allocate_slice(self.buffers.cuboid_colour_instances.len() as DeviceSize)
-                        .unwrap();
-                    cuboid_colour_instance_buffer
-                        .write()
-                        .unwrap()
-                        .copy_from_slice(&self.buffers.cuboid_colour_instances);
+                        .from_slice(&self.buffers.cuboid_colour_instances);
 
                     command_buffer_builder
                         .bind_vertex_buffers(
@@ -1265,7 +1259,7 @@ impl Pipelines {
         procedural_macros::generate_pipelines_struct_impl_new!()
     }
 
-    //procedural_macros::generate_pipelines_struct_impl_bind_functions!();
+    procedural_macros::generate_pipelines_struct_impl_bind_functions!();
 
     fn bind_instanced_simple_lit_colour_3d(
         &self,
@@ -1511,7 +1505,7 @@ impl<T> Hotel<T> {
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.vec.len()-self.dead_indices.len()
+        self.vec.len() - self.dead_indices.len()
     }
 }
 
@@ -1528,5 +1522,23 @@ impl<T> IndexMut<usize> for Hotel<T> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         self.vec[index].as_mut().unwrap()
+    }
+}
+
+// MARK: Subbuffer
+trait SubbufferAllocatorExtension {
+    fn from_slice<T>(&self, source: &[T]) -> Subbuffer<[T]>
+    where
+        T: Copy + BufferContents;
+}
+
+impl SubbufferAllocatorExtension for SubbufferAllocator {
+    fn from_slice<T>(&self, source: &[T]) -> Subbuffer<[T]>
+    where
+        T: Copy + BufferContents,
+    {
+        let buffer = self.allocate_slice(source.len() as DeviceSize).unwrap();
+        buffer.write().unwrap().copy_from_slice(source);
+        buffer
     }
 }
