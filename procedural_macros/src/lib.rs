@@ -138,7 +138,7 @@ const BUFFERS: &[StructBufferInfo] = &[
 const EXTERNAL_BUFFERS: &[ConstBufferInfo] = &[
     ConstBufferInfo {
         name: "camera_uniform",
-        path: "todo!()",
+        path: "camera_uniform",
         buffer_type: BufferType::DeviceFromEditable,
         element_type: "instanced_simple_lit_colour_3d::CameraUniform",
     }
@@ -213,7 +213,7 @@ impl BufferInfo {
 
     // TODO: add .clone() when needed.
     fn bind_path(&self) -> String {
-        if self.editable() {
+        if self.editable() &! matches!(self.buffer_type, BufferType::DeviceFromEditable) {
             format!("{}_buffer", self.name)
         } else {
             format!("{}", self.path)
@@ -678,7 +678,7 @@ pub fn command_list(input: TokenStream) -> TokenStream {
             Command::BindPipeline(name) => {
                 let info = pipelines_map.get(name).expect("Pipeline should exist.");
 
-                output.push_str(&format!("self.Pipelines.proc_bind_{name}(&mut command_buffer_builder, "));
+                output.push_str(&format!("self.pipelines.proc_bind_{name}(&mut command_buffer_builder, "));
 
                 if info.persistent() {
                     todo!("add persistent")
@@ -690,7 +690,7 @@ pub fn command_list(input: TokenStream) -> TokenStream {
                             Descriptor::Buffer(buffer) => {
                                 let buffer_info = buffers_map.get(buffer).expect("Buffer should exist.");
 
-                                output.push_str(&buffer_info.bind_path())
+                                output.push_str(&format!("{}, ", buffer_info.bind_path()));
 
                                 if matches!(allocated_buffers_map.get(buffer), None) {
                                     allocation.push_str(&buffer_info.buffer_allocation());
@@ -702,6 +702,8 @@ pub fn command_list(input: TokenStream) -> TokenStream {
                         }
                     }
                 }
+
+                output.push_str(");");
             }
             Command::BindVertexBuffers {
                 vertex_buffer,

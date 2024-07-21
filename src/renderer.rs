@@ -373,6 +373,15 @@ impl Renderer {
 
             match &window_specific.variety {
                 WindowVariety::Creature(camera) => {
+                    let camera_uniform = self
+                        .allocators
+                        .subbuffer_allocator
+                        .allocate_sized()
+                        .unwrap();
+                    *camera_uniform.write().unwrap() = camera
+                        .to_instanced_simple_lit_colour_3d_camera()
+                        .to_uniform();
+
                     procedural_macros::command_list!(creature_window);
                 }
                 WindowVariety::Selection => {}
