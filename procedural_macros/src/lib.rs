@@ -53,6 +53,16 @@ const BUFFERS: &[StructBufferInfo] = &[
                 starting_capacity: 30,
             },
         },
+
+        StructBufferInfo {
+            name: "cuboid_colour_physics_instances",
+            buffer_type: BufferType::HostHotel,
+            public: false,
+            element_type: "instanced_simple_lit_colour_3d::Instance",
+            fill: Fill::None {
+                starting_capacity: 30,
+            },
+        },
         
         StructBufferInfo {
             name: "cuboid_colour_potential_instances",
@@ -152,15 +162,15 @@ const PIPELINES: &[PipelineInfo] = &[
     },
     PipelineInfo {
         name: "simple_lit_colour_3d",
-        descriptors: &[Descriptor::Buffer("camera_uniform")],
+        descriptors: &[Descriptor::Buffer("camera_uniform"),],
     },
     PipelineInfo {
         name: "instanced_unlit_uv_2d_stretch",
-        descriptors: &[Descriptor::Buffer("camera_uniform")],
+        descriptors: &[Descriptor::Sampler("menu_sampler"),Descriptor::Image("testing_image")],
     },
     PipelineInfo {
         name: "instanced_text_sdf",
-        descriptors: &[Descriptor::Buffer("camera_uniform")],
+        descriptors: &[Descriptor::Sampler("menu_sampler"),Descriptor::Image("testing_image")],
     },
 ];
 
@@ -305,9 +315,8 @@ impl PipelineInfo {
                         return false;
                     }
                 }
-                _ => todo!(
-                    "support other descriptor types during setting of persistent_descriptor_sets"
-                ),
+
+                _ => (), // maybe wrong in future
             }
         }
         return true;
